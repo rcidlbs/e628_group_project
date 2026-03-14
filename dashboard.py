@@ -47,7 +47,7 @@ import dash_bootstrap_components as dbc
 # CONFIGURATION  ← edit these values to change pipeline behaviour
 # ─────────────────────────────────────────────────────────────────
 CSV_FILE     = "lending_club_sample.csv"  # cleaned file produced by EDA notebook
-NROWS        = 50000    # None = use all rows; set e.g. 100_000 for faster startup
+NROWS        = None    # None = use all rows; set e.g. 100_000 for faster startup
 TEST_SIZE    = 0.2     # fraction held out for evaluation (try 0.1 or 0.3)
 RANDOM_STATE = 42      # controls train/test split and all model random seeds
 
