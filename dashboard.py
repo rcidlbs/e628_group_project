@@ -47,7 +47,7 @@ import dash_bootstrap_components as dbc
 # CONFIGURATION  ← edit these values to change pipeline behaviour
 # ─────────────────────────────────────────────────────────────────
 CSV_FILE     = "lending_club_sample.csv"  # cleaned file produced by EDA notebook
-NROWS        = 50000    # None = use all rows; set e.g. 100_000 for faster startup
+NROWS        = 50_000  # Reduced for Render Free (512 MB RAM). Set to None to use all rows locally.
 TEST_SIZE    = 0.2     # fraction held out for evaluation (try 0.1 or 0.3)
 RANDOM_STATE = 42      # controls train/test split and all model random seeds
 
@@ -168,7 +168,7 @@ FEATURE_COLS  = list(X.columns)
 # ─────────────────────────────────────────────────────────────────
 print("Computing SHAP values...")
 np.random.seed(42)
-shap_idx    = np.random.choice(len(X_test), size=1500, replace=False)
+shap_idx    = np.random.choice(len(X_test), size=500, replace=False)
 X_shap      = X_test.iloc[shap_idx].reset_index(drop=True)
 explainer   = shap.TreeExplainer(xgb.get_booster())
 shap_values = explainer(X_shap)
@@ -914,18 +914,24 @@ tab_model = dbc.Container([
         "In waterfall plots: red bars pushed toward default, blue bars pushed away. "
         "This individual-level transparency is required by financial regulators (EU AI Act, ECOA): "
         "applicants denied credit have a legal right to a meaningful explanation, and SHAP makes that possible."),
+    dbc.Row([dbc.Col([
+        dbc.Button("Load SHAP Plots", id="shap-load-btn", color="primary",
+                   outline=True, className="mb-3"),
+        html.Small(" (click to generate — takes ~10 seconds)",
+                   className="text-muted"),
+    ])], className="mb-2"),
     dbc.Row([
-        dbc.Col(html.Img(src=SHAP_BEESWARM, style={"width":"100%"}), md=6),
-        dbc.Col(html.Img(src=SHAP_BAR,      style={"width":"100%"}), md=6),
+        dbc.Col(html.Img(id="shap-beeswarm-img", style={"width":"100%"}), md=6),
+        dbc.Col(html.Img(id="shap-bar-img",      style={"width":"100%"}), md=6),
     ], className="mb-2"),
     insight_box("High int_rate (red, right) increases default risk. High fico_avg (red, left) decreases it. "
                 "All directions match economic intuition — a model with contradictory SHAP directions "
                 "would be a red flag for data leakage.", C["blue"]),
     dbc.Row([
         dbc.Col([html.H6("Case A — High-Risk Borrower", className="text-center text-danger"),
-                 html.Img(src=SHAP_WATERFALL_HIGH, style={"width":"100%"})], md=6),
+                 html.Img(id="shap-waterfall-high-img", style={"width":"100%"})], md=6),
         dbc.Col([html.H6("Case B — Low-Risk Borrower", className="text-center text-success"),
-                 html.Img(src=SHAP_WATERFALL_LOW,  style={"width":"100%"})], md=6),
+                 html.Img(id="shap-waterfall-low-img",  style={"width":"100%"})], md=6),
     ], className="mb-2"),
     insight_box("Case A: no single factor disqualifies — it is the combination of high int_rate + "
                 "high grade_num + low fico_avg that creates the high-risk profile. "
@@ -1362,6 +1368,19 @@ def update_purpose_amount(amount_range):
     return fig
 
 
+# ── Callback: SHAP lazy load ───────────────────────────────────────
+@app.callback(
+    Output("shap-beeswarm-img",      "src"),
+    Output("shap-bar-img",           "src"),
+    Output("shap-waterfall-high-img","src"),
+    Output("shap-waterfall-low-img", "src"),
+    Input("shap-load-btn",           "n_clicks"),
+    prevent_initial_call=True,
+)
+def load_shap_plots(_):
+    return SHAP_BEESWARM, SHAP_BAR, SHAP_WATERFALL_HIGH, SHAP_WATERFALL_LOW
+
+
 # ── Callback: Distribution histograms ─────────────────────────────
 @app.callback(
     Output("dist-hist-graph","figure"),
@@ -1369,19 +1388,27 @@ def update_purpose_amount(amount_range):
     Input("dist-variable-dropdown","value"),
 )
 def update_dist(col):
-    label = next(o["label"] for o in DIST_OPTIONS if o["value"]==col)
-    cap   = df[col].quantile(0.99)
-    data  = df[df[col]<=cap]
-    fig_h = px.histogram(data, x=col, color="default_label", barmode="overlay",
-        color_discrete_map={"No Default":C["green"],"Default":C["red"]},
-        opacity=0.6, nbins=60, labels={col:label,"default_label":""},
-        title=f"Distribution: {label}", marginal="rug")
-    fig_h.update_layout(plot_bgcolor=C["bg"])
-    fig_b = px.box(data, x="default_label", y=col, color="default_label",
-        color_discrete_map={"No Default":C["green"],"Default":C["red"]},
-        labels={col:label,"default_label":""}, title=f"Boxplot: {label}")
-    fig_b.update_layout(showlegend=False, plot_bgcolor=C["bg"])
-    return fig_h, fig_b
+    try:
+        label = next(o["label"] for o in DIST_OPTIONS if o["value"]==col)
+        cap   = df[col].quantile(0.99)
+        data  = df[df[col] <= cap].copy()
+        # Sample to reduce memory pressure on Render Free
+        if len(data) > 20_000:
+            data = data.sample(20_000, random_state=42)
+        fig_h = px.histogram(data, x=col, color="default_label", barmode="overlay",
+            color_discrete_map={"No Default":C["green"],"Default":C["red"]},
+            opacity=0.6, nbins=60, labels={col:label,"default_label":""},
+            title=f"Distribution: {label}")
+        fig_h.update_layout(plot_bgcolor=C["bg"])
+        fig_b = px.box(data, x="default_label", y=col, color="default_label",
+            color_discrete_map={"No Default":C["green"],"Default":C["red"]},
+            labels={col:label,"default_label":""}, title=f"Boxplot: {label}")
+        fig_b.update_layout(showlegend=False, plot_bgcolor=C["bg"])
+        return fig_h, fig_b
+    except Exception as e:
+        empty = go.Figure()
+        empty.update_layout(title=f"Error loading {col}: {str(e)}", plot_bgcolor=C["bg"])
+        return empty, empty
 
 
 @app.callback(
