@@ -13,7 +13,7 @@ Requirements:
 # ─────────────────────────────────────────────────────────────────
 # 0. IMPORTS
 # ─────────────────────────────────────────────────────────────────
-import io, base64, warnings
+import io, base64, warnings, os
 warnings.filterwarnings("ignore")
 
 import numpy as np
@@ -123,45 +123,76 @@ X = X.fillna(X.median())
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=TEST_SIZE, random_state=RANDOM_STATE, stratify=y)
 
-scaler     = StandardScaler()
-X_train_sc = scaler.fit_transform(X_train)
-X_test_sc  = scaler.transform(X_test)
+# ─────────────────────────────────────────────────────────────────
+# LOAD OR TRAIN MODELS
+# If models/ folder exists, load pre-trained models (fast: ~15 sec).
+# Otherwise train from scratch (slow: ~4 min).
+# Run save_models.ipynb once locally to generate the models/ folder.
+# ─────────────────────────────────────────────────────────────────
+import joblib
 
-print("Training models (this may take ~1-2 minutes)...")
-lr = LogisticRegression(class_weight="balanced", max_iter=1000, random_state=42)
-lr.fit(X_train_sc, y_train)
-print("  Logistic Regression ✓")
+MODELS_DIR = "models"
 
-dt = DecisionTreeClassifier(max_depth=5, min_samples_leaf=50,
-     class_weight="balanced", random_state=42)
-dt.fit(X_train, y_train)
-print("  Decision Tree ✓")
+if os.path.exists(os.path.join(MODELS_DIR, "xgb.pkl")):
+    print("Loading pre-trained models from models/ ...")
+    lr     = joblib.load(f"{MODELS_DIR}/lr.pkl")
+    dt     = joblib.load(f"{MODELS_DIR}/dt.pkl")
+    rf     = joblib.load(f"{MODELS_DIR}/rf.pkl")
+    xgb    = joblib.load(f"{MODELS_DIR}/xgb.pkl")
+    scaler = joblib.load(f"{MODELS_DIR}/scaler.pkl")
 
-rf = RandomForestClassifier(n_estimators=200, max_features="sqrt", max_depth=15,
-     min_samples_leaf=20, class_weight="balanced", random_state=42, n_jobs=-1)
-rf.fit(X_train, y_train)
-print("  Random Forest ✓")
+    eval_data         = joblib.load(f"{MODELS_DIR}/eval_data.pkl")
+    X_test            = eval_data["X_test"]
+    y_test            = eval_data["y_test"]
+    proba_lr          = eval_data["proba_lr"]
+    proba_dt          = eval_data["proba_dt"]
+    proba_rf          = eval_data["proba_rf"]
+    proba_xgb         = eval_data["proba_xgb"]
+    OPTIMAL_THRESHOLD = eval_data["optimal_threshold"]
+    thresholds        = eval_data["thresholds"]
+    f1_scores         = eval_data["f1_scores"]
+    TRAIN_MEDIANS     = eval_data["X_train_medians"]
+    FEATURE_COLS      = eval_data["feature_cols"]
+    print(f"  Models loaded  |  Optimal threshold: {OPTIMAL_THRESHOLD:.2f}")
 
-neg, pos = (y_train==0).sum(), (y_train==1).sum()
-xgb = XGBClassifier(n_estimators=300, learning_rate=0.05, max_depth=4,
-    subsample=0.8, colsample_bytree=0.8, scale_pos_weight=round(neg/pos,2),
-    eval_metric="logloss", random_state=42)
-xgb.fit(X_train, y_train)
-print("  XGBoost ✓")
+else:
+    print("models/ not found — training from scratch (this may take ~4 minutes)...")
+    scaler     = StandardScaler()
+    X_train_sc = scaler.fit_transform(X_train)
+    X_test_sc  = scaler.transform(X_test)
 
-proba_lr  = lr.predict_proba(X_test_sc)[:,1]
-proba_dt  = dt.predict_proba(X_test)[:,1]
-proba_rf  = rf.predict_proba(X_test)[:,1]
-proba_xgb = xgb.predict_proba(X_test)[:,1]
+    lr = LogisticRegression(class_weight="balanced", max_iter=1000, random_state=RANDOM_STATE)
+    lr.fit(X_train_sc, y_train)
+    print("  Logistic Regression ✓")
 
-# Optimal threshold
-thresholds = np.arange(0.05, 0.95, 0.01)
-f1_scores  = [f1_score(y_test, (proba_xgb >= t).astype(int), pos_label=1) for t in thresholds]
-OPTIMAL_THRESHOLD = round(float(thresholds[np.argmax(f1_scores)]), 2)
-print(f"  Optimal threshold (max F1): {OPTIMAL_THRESHOLD:.2f}")
+    dt = DecisionTreeClassifier(max_depth=5, min_samples_leaf=50,
+         class_weight="balanced", random_state=RANDOM_STATE)
+    dt.fit(X_train, y_train)
+    print("  Decision Tree ✓")
 
-TRAIN_MEDIANS = X_train.median().to_dict()
-FEATURE_COLS  = list(X.columns)
+    rf = RandomForestClassifier(n_estimators=50, max_features="sqrt", max_depth=15,
+         min_samples_leaf=20, class_weight="balanced", random_state=RANDOM_STATE, n_jobs=-1)
+    rf.fit(X_train, y_train)
+    print("  Random Forest ✓")
+
+    neg, pos = (y_train==0).sum(), (y_train==1).sum()
+    xgb = XGBClassifier(n_estimators=300, learning_rate=0.05, max_depth=4,
+        subsample=0.8, colsample_bytree=0.8, scale_pos_weight=round(neg/pos,2),
+        eval_metric="logloss", random_state=RANDOM_STATE)
+    xgb.fit(X_train, y_train)
+    print("  XGBoost ✓")
+
+    proba_lr  = lr.predict_proba(X_test_sc)[:,1]
+    proba_dt  = dt.predict_proba(X_test)[:,1]
+    proba_rf  = rf.predict_proba(X_test)[:,1]
+    proba_xgb = xgb.predict_proba(X_test)[:,1]
+
+    thresholds        = np.arange(0.05, 0.95, 0.01)
+    f1_scores         = [f1_score(y_test, (proba_xgb >= t).astype(int), pos_label=1) for t in thresholds]
+    OPTIMAL_THRESHOLD = round(float(thresholds[np.argmax(f1_scores)]), 2)
+    TRAIN_MEDIANS     = X_train.median().to_dict()
+    FEATURE_COLS      = list(X.columns)
+    print(f"  Optimal threshold (max F1): {OPTIMAL_THRESHOLD:.2f}")
 
 # ─────────────────────────────────────────────────────────────────
 # 3. SHAP
