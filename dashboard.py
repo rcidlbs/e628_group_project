@@ -195,53 +195,83 @@ else:
     print(f"  Optimal threshold (max F1): {OPTIMAL_THRESHOLD:.2f}")
 
 # ─────────────────────────────────────────────────────────────────
-# 3. SHAP
+# 3. SHAP — load pre-generated PNGs or generate on first run
 # ─────────────────────────────────────────────────────────────────
-print("Computing SHAP values...")
-np.random.seed(42)
-shap_idx    = np.random.choice(len(X_test), size=500, replace=False)
-X_shap      = X_test.iloc[shap_idx].reset_index(drop=True)
-explainer   = shap.TreeExplainer(xgb.get_booster())
-shap_values = explainer(X_shap)
-
-proba_shap    = xgb.predict_proba(X_shap)[:,1]
-high_risk_idx = int(np.argsort(proba_shap)[-1])
-low_risk_idx  = int(np.argsort(proba_shap)[0])
-
 
 def _fig_to_b64():
+    """Convert current matplotlib figure to base64 PNG string."""
     buf = io.BytesIO()
-    plt.gcf().savefig(buf, format="png", bbox_inches="tight", dpi=110)
+    plt.gcf().savefig(buf, format="png", bbox_inches="tight", dpi=72)
     buf.seek(0)
     b64 = base64.b64encode(buf.read()).decode("utf-8")
     plt.close("all")
     return f"data:image/png;base64,{b64}"
 
 
-plt.figure(figsize=(10,7))
-shap.summary_plot(shap_values.values, X_shap, max_display=15, show=False)
-plt.title("SHAP Summary — Global Feature Impact & Direction", fontweight="bold")
-plt.tight_layout()
-SHAP_BEESWARM = _fig_to_b64()
+def _png_to_b64(path):
+    """Load a PNG file from disk and return as base64 string."""
+    with open(path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode("utf-8")
+    return f"data:image/png;base64,{b64}"
 
-plt.figure(figsize=(9,6))
-shap.summary_plot(shap_values.values, X_shap, plot_type="bar", max_display=15, show=False)
-plt.title("SHAP Feature Importance (mean |SHAP value|)", fontweight="bold")
-plt.tight_layout()
-SHAP_BAR = _fig_to_b64()
 
-plt.figure(figsize=(10,6))
-shap.plots.waterfall(shap_values[high_risk_idx], max_display=12, show=False)
-plt.title(f"High-Risk Borrower  (p = {proba_shap[high_risk_idx]:.1%})", fontweight="bold")
-plt.tight_layout()
-SHAP_WATERFALL_HIGH = _fig_to_b64()
+SHAP_PNG_FILES = {
+    "beeswarm":       f"{MODELS_DIR}/shap_beeswarm.png",
+    "bar":            f"{MODELS_DIR}/shap_bar.png",
+    "waterfall_high": f"{MODELS_DIR}/shap_waterfall_high.png",
+    "waterfall_low":  f"{MODELS_DIR}/shap_waterfall_low.png",
+}
 
-plt.figure(figsize=(10,6))
-shap.plots.waterfall(shap_values[low_risk_idx], max_display=12, show=False)
-plt.title(f"Low-Risk Borrower  (p = {proba_shap[low_risk_idx]:.1%})", fontweight="bold")
-plt.tight_layout()
-SHAP_WATERFALL_LOW = _fig_to_b64()
-print("  SHAP done ✓")
+if all(os.path.exists(p) for p in SHAP_PNG_FILES.values()):
+    print("Loading pre-generated SHAP plots from models/ ...")
+    SHAP_BEESWARM      = _png_to_b64(SHAP_PNG_FILES["beeswarm"])
+    SHAP_BAR           = _png_to_b64(SHAP_PNG_FILES["bar"])
+    SHAP_WATERFALL_HIGH = _png_to_b64(SHAP_PNG_FILES["waterfall_high"])
+    SHAP_WATERFALL_LOW  = _png_to_b64(SHAP_PNG_FILES["waterfall_low"])
+    print("  SHAP plots loaded ✓")
+else:
+    print("SHAP PNGs not found — generating now (this takes ~1 minute)...")
+    np.random.seed(42)
+    shap_idx    = np.random.choice(len(X_test), size=500, replace=False)
+    X_shap      = X_test.iloc[shap_idx].reset_index(drop=True)
+    explainer   = shap.TreeExplainer(xgb.get_booster())
+    shap_values = explainer(X_shap)
+
+    proba_shap    = xgb.predict_proba(X_shap)[:,1]
+    high_risk_idx = int(np.argsort(proba_shap)[-1])
+    low_risk_idx  = int(np.argsort(proba_shap)[0])
+
+    plt.figure(figsize=(10,7))
+    shap.summary_plot(shap_values.values, X_shap, max_display=15, show=False)
+    plt.title("SHAP Summary — Global Feature Impact & Direction", fontweight="bold")
+    plt.tight_layout()
+    SHAP_BEESWARM = _fig_to_b64()
+
+    plt.figure(figsize=(9,6))
+    shap.summary_plot(shap_values.values, X_shap, plot_type="bar", max_display=15, show=False)
+    plt.title("SHAP Feature Importance (mean |SHAP value|)", fontweight="bold")
+    plt.tight_layout()
+    SHAP_BAR = _fig_to_b64()
+
+    plt.figure(figsize=(10,6))
+    shap.plots.waterfall(shap_values[high_risk_idx], max_display=12, show=False)
+    plt.title(f"High-Risk Borrower  (p = {proba_shap[high_risk_idx]:.1%})", fontweight="bold")
+    plt.tight_layout()
+    SHAP_WATERFALL_HIGH = _fig_to_b64()
+
+    plt.figure(figsize=(10,6))
+    shap.plots.waterfall(shap_values[low_risk_idx], max_display=12, show=False)
+    plt.title(f"Low-Risk Borrower  (p = {proba_shap[low_risk_idx]:.1%})", fontweight="bold")
+    plt.tight_layout()
+    SHAP_WATERFALL_LOW = _fig_to_b64()
+    print("  SHAP done ✓")
+
+# ─────────────────────────────────────────────────────────────────
+# 3b. GLOBAL SHAP EXPLAINER (created once, reused in Score Calculator)
+# ─────────────────────────────────────────────────────────────────
+print("Initializing SHAP explainer...")
+SHAP_EXPLAINER = shap.TreeExplainer(xgb.get_booster())
+print("  SHAP explainer ready ✓")
 
 # ─────────────────────────────────────────────────────────────────
 # 4. STATIC PLOTLY FIGURES
@@ -1640,8 +1670,7 @@ def update_calculator(
             ann.y = ann.y - 0.04
 
     # Mini SHAP waterfall for this specific input
-    exp_single = shap.TreeExplainer(xgb.get_booster())
-    sv = exp_single(X_input)
+    sv = SHAP_EXPLAINER(X_input)
     plt.figure(figsize=(10,5))
     shap.plots.waterfall(sv[0], max_display=12, show=False)
     plt.title("What drove this prediction?", fontweight="bold")
