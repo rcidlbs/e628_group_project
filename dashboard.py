@@ -47,7 +47,7 @@ import dash_bootstrap_components as dbc
 # CONFIGURATION  ← edit these values to change pipeline behaviour
 # ─────────────────────────────────────────────────────────────────
 CSV_FILE     = "lending_club_sample.csv"  # cleaned file produced by EDA notebook
-NROWS        = None  # Reduced for Render Free (512 MB RAM). Set to None to use all rows locally.
+NROWS        = 50_000  # Reduced for Render Free (512 MB RAM). Set to None to use all rows locally.
 TEST_SIZE    = 0.2     # fraction held out for evaluation (try 0.1 or 0.3)
 RANDOM_STATE = 42      # controls train/test split and all model random seeds
 
@@ -98,6 +98,11 @@ df_raw["delinquency_flag"] = (
 ).astype(int)
 
 df = df_raw.copy()
+
+# Ensure default_label exists for EDA callbacks
+if "default_label" not in df.columns:
+    df["default_label"] = df["default"].map({0: "No Default", 1: "Default"})
+
 print(f"  Rows: {len(df):,}  |  Default rate: {df['default'].mean():.1%}")
 
 # ─────────────────────────────────────────────────────────────────
@@ -1510,9 +1515,20 @@ def update_dist(col):
         fig_b.update_layout(showlegend=False, plot_bgcolor=C["bg"])
         return fig_h, fig_b
     except Exception as e:
-        empty = go.Figure()
-        empty.update_layout(title=f"Error loading {col}: {str(e)}", plot_bgcolor=C["bg"])
-        return empty, empty
+        import traceback
+        err_msg = traceback.format_exc()
+        print(f"[update_dist ERROR] col={col}\n{err_msg}")
+        def _err_fig(msg):
+            f = go.Figure()
+            f.update_layout(
+                plot_bgcolor=C["bg"],
+                xaxis=dict(visible=False), yaxis=dict(visible=False),
+                annotations=[dict(text=msg, xref="paper", yref="paper",
+                    x=0.5, y=0.5, showarrow=False,
+                    font=dict(size=11, color=C["red"]))])
+            return f
+        msg = f"Error: {str(e)}"
+        return _err_fig(msg), _err_fig(msg)
 
 
 @app.callback(
