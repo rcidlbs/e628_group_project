@@ -55,7 +55,11 @@ RANDOM_STATE = 42      # controls train/test split and all model random seeds
 # 1. LOAD & PREPARE DATA
 # ─────────────────────────────────────────────────────────────────
 print(f"Loading data from '{CSV_FILE}' (nrows={NROWS}, test_size={TEST_SIZE})...")
-df_raw = pd.read_csv(CSV_FILE, nrows=NROWS, low_memory=False)
+df_raw = pd.read_csv(CSV_FILE, low_memory=False)
+if NROWS:
+    # Use the MOST RECENT loans (tail) instead of oldest (head)
+    # Lending Club CSV is chronologically ordered — tail = 2015-2018 vintages
+    df_raw = df_raw.tail(NROWS).reset_index(drop=True)
 
 for col in ["revol_util", "bc_util", "pct_tl_nvr_dlq", "percent_bc_gt_75"]:
     if col in df_raw.columns:
