@@ -982,17 +982,21 @@ tab_model = dbc.Container([
                    className="text-muted"),
     ])], className="mb-2"),
     dbc.Row([
-        dbc.Col(html.Img(id="shap-beeswarm-img", style={"width":"100%"}), md=6),
-        dbc.Col(html.Img(id="shap-bar-img",      style={"width":"100%"}), md=6),
+        dbc.Col(html.Img(id="shap-beeswarm-img",
+            style={"width":"80%","display":"block","margin":"0 auto"}), md=6),
+        dbc.Col(html.Img(id="shap-bar-img",
+            style={"width":"80%","display":"block","margin":"0 auto"}), md=6),
     ], className="mb-2"),
     insight_box("High int_rate (red, right) increases default risk. High fico_avg (red, left) decreases it. "
                 "All directions match economic intuition — a model with contradictory SHAP directions "
                 "would be a red flag for data leakage.", C["blue"]),
     dbc.Row([
         dbc.Col([html.H6("Case A — High-Risk Borrower", className="text-center text-danger"),
-                 html.Img(id="shap-waterfall-high-img", style={"width":"100%"})], md=6),
+                 html.Img(id="shap-waterfall-high-img",
+                     style={"width":"85%","display":"block","margin":"0 auto"})], md=6),
         dbc.Col([html.H6("Case B — Low-Risk Borrower", className="text-center text-success"),
-                 html.Img(id="shap-waterfall-low-img",  style={"width":"100%"})], md=6),
+                 html.Img(id="shap-waterfall-low-img",
+                     style={"width":"85%","display":"block","margin":"0 auto"})], md=6),
     ], className="mb-2"),
     insight_box("Case A: no single factor disqualifies — it is the combination of high int_rate + "
                 "high grade_num + low fico_avg that creates the high-risk profile. "
@@ -1147,19 +1151,58 @@ tab_calc = dbc.Container([
         ], md=5, style={"background":"#f8f9fa","padding":"20px","borderRadius":"8px"}),
 
         dbc.Col([
-            html.Div(id="calc-output",
-                children=dbc.Alert("Fill in the form and click 'Calculate Risk' to get the prediction.",
-                                   color="secondary")),
-            html.Hr(),
-            dcc.Graph(id="calc-dist-graph"),
-            html.Hr(),
-            html.H6("What drove this prediction? (SHAP waterfall)", className="mt-2"),
-            html.Small("Red bars pushed toward default. Blue bars pushed away from default.",
-                       className="text-muted"),
-            html.Br(),
-            html.Img(id="calc-shap-img", style={"width":"100%"}),
+            dbc.Spinner([
+                html.Div(id="calc-output",
+                    children=dbc.Alert("Fill in the form and click 'Calculate Risk' to get the prediction.",
+                                       color="secondary")),
+                html.Hr(),
+                dcc.Graph(id="calc-dist-graph"),
+                html.Hr(),
+                html.H6("What drove this prediction? (SHAP waterfall)", className="mt-2"),
+                html.Small("Red bars pushed toward default. Blue bars pushed away from default.",
+                           className="text-muted"),
+                html.Br(),
+                html.Div(id="calc-shap-img"),
+            ], color="primary", type="border", spinner_style={"width":"3rem","height":"3rem"}),
         ], md=7),
     ], className="mt-3"),
+
+    html.Hr(),
+    html.Div([
+        html.H5("Global Model Explainability (SHAP)", className="mb-1 mt-3",
+                style={"fontWeight":"700","color":"#2d3436"}),
+        html.P("How does the model behave across all borrowers? "
+               "These plots are pre-computed from the full training set and do not depend on the inputs above.",
+               className="text-muted mb-3", style={"fontSize":"0.88rem"}),
+        concept_box("How to read SHAP plots",
+            "Each dot in the beeswarm is one loan. Position on the x-axis shows how much that feature "
+            "pushed the prediction toward or away from default. Color shows the feature value: "
+            "red = high value, blue = low value. "
+            "The bar chart shows the average absolute impact — a simpler summary of which features matter most overall."),
+        dbc.Row([
+            dbc.Col([
+                html.H6("Feature Impact & Direction (Beeswarm)",
+                        className="text-center mb-2",
+                        style={"fontSize":"0.88rem","color":"#636e72"}),
+                html.Img(id="calc-shap-beeswarm",
+                         src=SHAP_BEESWARM,
+                         style={"width":"90%","display":"block","margin":"0 auto"}),
+            ], md=6),
+            dbc.Col([
+                html.H6("Feature Importance (Mean |SHAP|)",
+                        className="text-center mb-2",
+                        style={"fontSize":"0.88rem","color":"#636e72"}),
+                html.Img(id="calc-shap-bar",
+                         src=SHAP_BAR,
+                         style={"width":"90%","display":"block","margin":"0 auto"}),
+            ], md=6),
+        ], className="mb-2"),
+        insight_box("High int_rate and high grade_num push predictions toward default. "
+                    "High fico_avg pushes away from default. "
+                    "Use this as context to understand where your borrower's specific factors "
+                    "sit relative to the overall model behavior."),
+    ]),
+
 ], fluid=True)
 
 # ─────────────────────────────────────────────────────────────────
@@ -1511,7 +1554,7 @@ def update_fi(model_choice):
 @app.callback(
     Output("calc-output",    "children"),
     Output("calc-dist-graph","figure"),
-    Output("calc-shap-img",  "src"),
+    Output("calc-shap-img",  "children"),
     Input("calc-button","n_clicks"),
     State("inp-loan-amnt",  "value"),
     State("inp-term",       "value"),
@@ -1669,13 +1712,99 @@ def update_calculator(
         if ann.text in [p[2] for p in ctx_pairs]:
             ann.y = ann.y - 0.04
 
-    # Mini SHAP waterfall for this specific input
-    sv = SHAP_EXPLAINER(X_input)
-    plt.figure(figsize=(10,5))
-    shap.plots.waterfall(sv[0], max_display=12, show=False)
-    plt.title("What drove this prediction?", fontweight="bold")
-    plt.tight_layout()
-    shap_img = _fig_to_b64()
+    # Feature contributions — fast proxy using XGBoost gain importance × deviation
+    booster    = xgb.get_booster()
+    importance = pd.Series(booster.get_score(importance_type="gain"))
+    importance = importance.reindex(FEATURE_COLS).fillna(0)
+
+    input_vals  = X_input.iloc[0]
+    median_vals = pd.Series(TRAIN_MEDIANS).reindex(FEATURE_COLS).fillna(0)
+    diff        = (input_vals - median_vals).fillna(0)
+
+    # Weighted contribution score
+    contrib_raw = importance * diff.abs()
+    total_contrib = contrib_raw.sum()
+    contrib_pct = (contrib_raw / total_contrib * 100) if total_contrib > 0 else contrib_raw
+    signs = diff.apply(lambda v: 1 if v >= 0 else -1)
+    contrib_signed = contrib_pct * signs
+
+    top = contrib_signed.abs().sort_values(ascending=False).head(12)
+    top_features = contrib_signed.reindex(top.index)
+
+    def _fmt_val(feat, val):
+        """Format a feature value nicely."""
+        if abs(val) > 1000:
+            return f"{val:,.0f}"
+        elif abs(val) > 10:
+            return f"{val:.1f}"
+        else:
+            return f"{val:.2f}"
+
+    rows = []
+    for feat in top_features.index:
+        contrib_val = top_features[feat]
+        user_val    = input_vals.get(feat, float("nan"))
+        med_val     = median_vals.get(feat, float("nan"))
+        diff_val    = diff.get(feat, float("nan"))
+        is_risk     = contrib_val > 0
+        color       = C["red"] if is_risk else C["green"]
+        arrow       = "▲" if is_risk else "▼"
+        direction   = "increases risk" if is_risk else "reduces risk"
+        pct         = abs(contrib_val)
+
+        rows.append(html.Tr([
+            html.Td(feat,
+                    style={"fontSize":"0.8rem","fontWeight":"600",
+                           "maxWidth":"150px","overflow":"hidden",
+                           "textOverflow":"ellipsis","whiteSpace":"nowrap"}),
+            html.Td(_fmt_val(feat, user_val),
+                    style={"fontSize":"0.8rem","textAlign":"right"}),
+            html.Td(_fmt_val(feat, med_val),
+                    style={"fontSize":"0.8rem","textAlign":"right","color":C["grey"]}),
+            html.Td(_fmt_val(feat, diff_val),
+                    style={"fontSize":"0.8rem","textAlign":"right",
+                           "color": C["red"] if diff_val > 0 else C["green"]}),
+            html.Td(f"{arrow} {pct:.1f}%",
+                    style={"fontSize":"0.8rem","fontWeight":"700",
+                           "color":color,"textAlign":"right"}),
+            html.Td(direction,
+                    style={"fontSize":"0.78rem","color":color}),
+        ]))
+
+    shap_img = html.Div([
+        html.P("What drove this prediction?",
+               style={"fontWeight":"700","fontSize":"0.92rem","marginBottom":"8px"}),
+        dbc.Table([
+            html.Thead(
+                html.Tr([
+                    html.Th("Feature"),
+                    html.Th("Your value",  style={"textAlign":"right"}),
+                    html.Th("Median",      style={"textAlign":"right"}),
+                    html.Th("Difference",  style={"textAlign":"right"}),
+                    html.Th("% Impact",    style={"textAlign":"right"}),
+                    html.Th("Direction"),
+                ]),
+                style={"background":"#eaf0fb","color":"#2d3436","fontSize":"0.78rem",
+                        "borderBottom":"2px solid #0984e3"}
+            ),
+            html.Tbody(rows),
+        ], bordered=False, hover=True, responsive=True, size="sm",
+           style={"marginBottom":"6px"}),
+        html.Div([
+            html.Small([
+                html.Strong("How to read this table: "),
+                "% Impact = XGBoost feature importance × |your value − training median|, normalized to 100%. ",
+                "It shows which features pushed your score most, and in which direction. ",
+                html.Br(),
+                html.Strong("Note: "),
+                "This is an approximation. For exact individual-level explanations, SHAP (SHapley Additive "
+                "exPlanations) would be used — but SHAP requires ~10–30 seconds of computation per prediction "
+                "and is not feasible on the free hosting tier. The full SHAP analysis for the overall model "
+                "is available in the Model Evaluation tab.",
+            ], style={"fontSize":"0.76rem","color":C["grey"],"lineHeight":"1.5"}),
+        ], style={"background":"#f0f3f7","padding":"10px","borderRadius":"4px","marginTop":"4px"}),
+    ], style={"background":"white","padding":"14px","borderRadius":"6px",
+              "border":"1px solid #dfe6e9"})
 
     return output_card, fig_ctx, shap_img
 
