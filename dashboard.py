@@ -747,12 +747,10 @@ tab_eda = dbc.Container([
     section_header("About this Dataset",
         "Before any analysis, it is important to understand what data we are working with and how it was prepared."),
     concept_box("Dataset: Lending Club 2007–2018",
-        f"The original dataset contains approximately 2 million loans and 151 columns. "
-        f"For this project we work with a cleaned sample of {len(df):,} loans. "
-        f"All loans with status 'Current' were excluded because their final outcome is still unknown at the time of analysis — "
-        "including them would introduce noise into the target variable. "
-        "The remaining loans all have a definitive outcome: either Fully Paid (no default) or a terminal delinquency state (default). "
-        "The data spans originations from 2007 to Q4 2018, covering multiple economic cycles including the 2008 financial crisis."),
+        f"The raw Lending Club dataset has around 2 million loans across 151 columns — way too much to run interactively. "
+        f"For the charts in this tab we use a sample of {len(df):,} recent loans, but the models were trained on the full ~102,000 loans with known outcomes. "
+        "Loans still marked 'Current' were excluded — we don't know yet if they'll default, so including them would corrupt the target. "
+        "The dataset runs from 2007 through Q4 2018, so it includes both the 2008 financial crisis and the subsequent recovery."),
     concept_box("Why only 31 of 151 columns?",
         "The original dataset contains many columns that only exist after the loan has been active for some time — "
         "for example: total_pymnt (total amount paid), recoveries (amount recovered after charge-off), "
@@ -763,20 +761,19 @@ tab_eda = dbc.Container([
         "The 31 columns we selected are all known at the moment of loan origination — "
         "the only point in time when a real model would need to make a decision."),
     concept_box("What is data leakage?",
-        "Data leakage occurs when the model is trained on information that would not be available at prediction time. "
-        "A model with leakage will appear to perform extremely well in testing but will fail completely in production. "
-        "For example: if we included 'recoveries' as a feature, the model would learn that recoveries > 0 means "
-        "the loan defaulted — which is true, but only because recoveries are recorded after default happens. "
-        "The model would be learning the outcome, not predicting it. "
-        "Detecting and eliminating leakage is one of the most critical steps in any real-world ML project."),
+        "Data leakage is when the model gets to see information it would never have at prediction time. "
+        "It looks great on paper but completely falls apart in the real world. "
+        "A classic example here: 'recoveries' (money recovered after a charge-off) only exists after someone has already defaulted — "
+        "if you include it, the model is basically just reading the answer key. "
+        "Ruling out these variables is one of the most important things you can do before building any credit model."),
     html.Hr(),
 
     section_header("Class Imbalance",
         "Understanding the balance between outcomes is the first step before any analysis."),
     concept_box("What is class imbalance?",
-        "When one outcome is much more frequent than the other. Here ~80% of loans are repaid and ~20% default. "
-        "A model that always predicts 'No Default' would get 80% accuracy but catch zero defaults. "
-        "That is why we use AUC-ROC instead of accuracy as our evaluation metric."),
+        "When one class is much more common than the other — here about 4 out of every 5 loans were repaid. "
+        "A model that just predicts 'No Default' every single time would be 80% accurate, which sounds fine until you realise "
+        "it never catches a single fraud. That's why accuracy is useless here and we use AUC-ROC instead."),
     dbc.Row([
         dbc.Col(dcc.Graph(figure=fig_status), md=7),
         dbc.Col(dcc.Graph(figure=fig_pie),    md=5),
@@ -938,19 +935,27 @@ tab_eda = dbc.Container([
 # ─────────────────────────────────────────────────────────────────
 tab_model = dbc.Container([
 
+    dbc.Alert([
+        html.Strong("Training data note: "),
+        "All models were trained on the full dataset of approximately 102,000 Lending Club loans (2007–2018), "
+        "not on the 50,000-loan sample used for the EDA charts. "
+        "The metrics shown here reflect performance on a held-out test set drawn from the same full dataset.",
+    ], color="info", className="mb-3",
+       style={"fontSize":"0.88rem","borderLeft":"4px solid #0984e3"}),
+
     section_header("Model Comparison",
-        "Four models with increasing complexity to understand the trade-off between power and interpretability."),
+        "Five models ranging from simple to complex. Each makes different assumptions about the data."),
     html.Div([
-        html.P("Metrics computed on a stratified hold-out test set. "
-               "Bold green = best value in column. XGBoost and LightGBM use the optimal F1 threshold; all others use 0.5.",
+        html.P("Metrics on a stratified hold-out test set (20% of ~102k loans). "
+               "Bold green = best value in each column. XGBoost and LightGBM use the optimal F1 threshold; others use 0.5.",
                style={"fontSize":"0.83rem","color":"#636e72","marginBottom":"8px"}),
         summary_table,
     ], className="mb-3"),
     concept_box("AUC-ROC and Gini — why these metrics?",
-        "Accuracy is misleading with imbalanced data: a model that always predicts 'No Default' gets 80% accuracy "
-        "but catches zero defaults. AUC-ROC measures how well the model ranks borrowers by risk at every threshold. "
-        "AUC = 0.5 means random; AUC = 1.0 means perfect separation. "
-        "Gini = 2×AUC − 1 is the same metric rescaled to [0,1] and is the standard in retail banking credit scoring."),
+        "A model that always predicts 'No Default' gets 80% accuracy here — which is meaningless. "
+        "AUC-ROC measures something more useful: how well the model separates risky borrowers from safe ones at any cutoff. "
+        "0.5 = no better than a coin flip. 1.0 = perfect. Real-world credit models typically land between 0.70 and 0.80. "
+        "Gini = 2×AUC − 1 is just AUC rescaled to start at 0, which is how most banks report it."),
     dbc.Row([
         dbc.Col([
             html.Div([
@@ -975,25 +980,27 @@ tab_model = dbc.Container([
     section_header("Precision vs Recall — The Business Trade-off",
         "The Precision-Recall curve focuses on the positive class (defaults) and is more informative than ROC with imbalanced data."),
     concept_box("Precision vs Recall",
-        "Precision: of all loans flagged as risky, what fraction actually defaults? "
-        "Recall: of all loans that default, what fraction does the model catch? "
-        "These goals are always in tension — improving one hurts the other. "
-        "The right balance is a business decision: how costly is a missed default vs a rejected good borrower?"),
+        "Precision asks: of everything the model flagged as risky, how many actually were? "
+        "Recall asks: of all the actual defaults, how many did the model catch? "
+        "You can't have both at 100% — push one up and the other comes down. "
+        "Which matters more depends on the business. A bank losing money on charge-offs cares more about recall. "
+        "A bank worried about rejecting good customers cares more about precision."),
     dbc.Row([
         dbc.Col(dcc.Graph(figure=fig_pr), md=6),
         dbc.Col(dcc.Graph(figure=fig_f1), md=6),
     ], className="mb-1"),
-    insight_box(f"The optimal threshold for XGBoost (maximizing F1) is {OPTIMAL_THRESHOLD:.2f}, not 0.5. "
-                "With imbalanced data, 0.5 is almost never optimal — "
-                "defaults cluster in the 0.2–0.4 probability range and get missed at threshold 0.5."),
+    insight_box(f"The optimal threshold for XGBoost is {OPTIMAL_THRESHOLD:.2f} — not the intuitive 0.5. "
+                "With 80/20 imbalanced data, most defaults score well below 0.5, "
+                "so using 0.5 as the cutoff misses a large share of them."),
     html.Hr(),
 
     section_header("Confusion Matrix — Threshold Sensitivity (XGBoost)",
         "Move the slider to see how the decision threshold affects false positives vs false negatives."),
     concept_box("What is the decision threshold?",
-        "The model outputs a probability between 0 and 1. The threshold is the cutoff: above it we predict Default. "
-        "Lower threshold → catches more defaults (higher recall) but flags more good borrowers (lower precision). "
-        "Higher threshold → opposite. The correct threshold depends on the bank's cost structure."),
+        "The model gives a probability, but a real decision needs a yes/no answer. The threshold is that cutoff line. "
+        "Lower threshold: catches more defaults but also rejects more good borrowers by mistake. "
+        "Higher threshold: fewer false alarms but more missed defaults. "
+        "There's no universally correct value — it depends entirely on how much a missed default costs vs a wrongful rejection."),
     dbc.Row([dbc.Col([
         html.Label("Decision threshold:"),
         dcc.Slider(id="threshold-slider", min=0.1, max=0.9, step=0.05, value=OPTIMAL_THRESHOLD,
@@ -1151,10 +1158,10 @@ tab_calc = dbc.Container([
         dbc.Col([
             html.H5("Borrower & Loan Details", className="mb-3"),
             concept_box("How this works",
-                "Fill in the details below and click 'Calculate Risk'. "
-                "The XGBoost model trained on 133,000+ Lending Club loans will output the predicted default probability. "
-                "Hover over ⓘ next to each label for an explanation. "
-                "Missing inputs are filled with training set medians."),
+                "Enter the loan and borrower details and hit 'Calculate Risk'. "
+                "The model will return a default probability based on patterns learned from ~102,000 real Lending Club loans. "
+                "Hover ⓘ on any label to see what that variable means. "
+                "Leave a field blank and it will default to the training set median — useful for quick scenarios."),
             dbc.Button("Calculate Risk", id="calc-button", color="primary",
                        size="lg", className="w-100 mb-3"),
 
@@ -1744,41 +1751,56 @@ def update_calculator(
     threshold = threshold or OPTIMAL_THRESHOLD
     decision  = "DEFAULT" if prob >= threshold else "APPROVED"
 
-    if prob < 0.15:
-        risk_label, risk_color, risk_emoji = "LOW RISK",    C["green"],  "✅"
-    elif prob < 0.35:
-        risk_label, risk_color, risk_emoji = "MEDIUM RISK", C["orange"], "⚠️"
+    # Color logic tied to decision, not just probability
+    if decision == "DEFAULT":
+        # Declined — always red regardless of probability
+        dec_label  = "DECLINED"
+        dec_color  = C["red"]
+        dec_emoji  = "🚨"
+        dec_note   = "This loan would be flagged as high default risk and declined."
+    elif prob >= threshold * 0.75:
+        # Approved but with elevated risk (within 25% of threshold)
+        dec_label  = "APPROVED WITH CAUTION"
+        dec_color  = C["orange"]
+        dec_emoji  = "⚠️"
+        dec_note   = "The loan passes the threshold but the probability is relatively high. Manual review recommended."
     else:
-        risk_label, risk_color, risk_emoji = "HIGH RISK",   C["red"],    "🚨"
-
-    dec_color = C["red"] if decision=="DEFAULT" else C["green"]
+        # Comfortably approved
+        dec_label  = "APPROVED"
+        dec_color  = C["green"]
+        dec_emoji  = "✅"
+        dec_note   = "Default probability is well below the threshold. Loan looks low risk."
 
     output_card = dbc.Card([dbc.CardBody([
         dbc.Row([
             dbc.Col([
-                html.H2(f"{risk_emoji}  {prob:.1%}",
-                        style={"color":risk_color,"fontSize":"3rem"}),
-                html.H4(risk_label, style={"color":risk_color}),
-            ], md=7),
-            dbc.Col([
-                html.H3(decision, style={"color":dec_color,"fontWeight":"bold","marginTop":"10px"}),
-                html.Small(f"Threshold = {round(threshold,2)}", className="text-muted"),
+                html.H2(f"{prob:.1%}",
+                        style={"color":dec_color,"fontSize":"3rem","fontWeight":"700"}),
+                html.P("Predicted default probability", className="text-muted mb-0",
+                       style={"fontSize":"0.82rem"}),
             ], md=5),
+            dbc.Col([
+                html.H3(f"{dec_emoji}  {dec_label}",
+                        style={"color":dec_color,"fontWeight":"bold","marginTop":"6px"}),
+                html.Small(dec_note, style={"color":"#636e72","fontSize":"0.82rem"}),
+                html.Br(),
+                html.Small(f"Decision threshold: {round(threshold,2)}", className="text-muted"),
+            ], md=7),
         ]),
         html.Hr(),
         dbc.Row([
-            dbc.Col([html.Small("Grade",    className="text-muted"), html.H5(grade)],        md=3),
+            dbc.Col([html.Small("Grade",    className="text-muted"), html.H5(grade)],          md=3),
             dbc.Col([html.Small("Int Rate", className="text-muted"), html.H5(f"{int_rate}%")], md=3),
-            dbc.Col([html.Small("FICO",     className="text-muted"), html.H5(fico)],          md=3),
-            dbc.Col([html.Small("DTI",      className="text-muted"), html.H5(dti)],           md=3),
+            dbc.Col([html.Small("FICO",     className="text-muted"), html.H5(fico)],            md=3),
+            dbc.Col([html.Small("DTI",      className="text-muted"), html.H5(dti)],             md=3),
         ]),
         html.Hr(),
         html.Small(
-            f"Predicted by XGBoost trained on {len(df):,} Lending Club loans (2007–2018). "
-            f"Missing inputs filled with training set medians. "
-            f"Optimal threshold (max F1): {OPTIMAL_THRESHOLD:.2f}.",
+            "Prediction from XGBoost trained on ~102,000 Lending Club loans (2007–2018). "
+            f"Threshold set at {round(threshold,2)} — the value that maximises F1 score on the test set. "
+            "Fields left blank are filled with the training set median.",
             className="text-muted"),
-    ])], style={"borderLeft":f"6px solid {risk_color}"})
+    ])], style={"borderLeft":f"6px solid {dec_color}"})
 
     # Distribution context
     ctx_pairs = [
