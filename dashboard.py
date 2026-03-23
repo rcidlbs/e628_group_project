@@ -62,7 +62,7 @@ import dash_bootstrap_components as dbc
 # ─────────────────────────────────────────────────────────────────
 CSV_FILE = "lending_club_sample.csv"  # cleaned file produced by EDA notebook
 NROWS = (
-    50_000  # Reduced for Render Free (512 MB RAM). Set to None to use all rows locally.
+    30_000  # Reduced for Render Free (512 MB RAM). Set to None to use all rows locally.
 )
 TEST_SIZE = 0.2  # fraction held out for evaluation (try 0.1 or 0.3)
 RANDOM_STATE = 42  # controls train/test split and all model random seeds
@@ -1137,7 +1137,7 @@ overview_cards = dbc.Row(
         dbc.Col(
             kpi_card(
                 "Models trained",
-                "4 classifiers",
+                "5 classifiers",
                 "Logistic Reg · Decision Tree · Random Forest · XGBoost · LightGBM",
                 "#9b59b6",
             ),
